@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>제주 신화 퀘스트 : 실시간 GPS 탐험</title>
+
+  <!-- Tailwind CSS & Pretendard Font -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
+  
+  <!-- Leaflet Map CSS/JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- Confetti Particle -->
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+
+  <style>
+    * { font-family: 'Pretendard', sans-serif; -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
+    body { background-color: #030712; margin: 0; padding: 0; overflow: hidden; }
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+    #map {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      width: 100%; height: 100%;
+      z-index: 1;
+      background: #0f172a;
+    }
+
+    /* 포켓몬고 스타일 펄스 링 */
+    .radar-pulse {
+      position: absolute;
+      width: 140px; height: 140px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(16, 185, 129, 0.35) 0%, rgba(16, 185, 129, 0) 70%);
+      border: 2px solid #10b981;
+      animation: pulse-anim 2s infinite ease-out;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+    }
+    @keyframes pulse-anim {
+      0% { transform: translate(-50%, -50%) scale(0.2); opacity: 1; }
+      100% { transform: translate(-50%, -50%) scale(1.6); opacity: 0; }
+    }
+
+    /* 정령 둥둥 뜨는 애니메이션 */
+    @keyframes spirit-float {
+      0%, 100% { transform: translateY(0px) scale(1); }
+      50% { transform: translateY(-8px) scale(1.05); }
+    }
+    .floating-spirit { animation: spirit-float 2.5s ease-in-out infinite; }
+
+    /* 포획 타이밍 링 */
+    @keyframes catch-ring-shrink {
+      0% { transform: scale(1.5); border-color: #facc15; }
+      50% { transform: scale(0.8); border-color: #10b981; }
+      100% { transform: scale(0.3); border-color: #ef4444; }
+    }
+    .catch-ring { animation: catch-ring-shrink 1.8s infinite linear; }
+  </style>
+</head>
+<body class="flex justify-center items-center h-screen bg-black">
+
+  <!-- 메인 모바일 래퍼 -->
+  <div class="relative w-full max-w-md h-full sm:h-[880px] bg-slate-950 sm:rounded-3xl overflow-hidden shadow-2xl border border-slate-800 flex flex-col">
+    
+    <!-- 1. 상단 상태바 -->
+    <header class="absolute top-0 left-0 right-0 z-30 bg-slate-950/90 backdrop-blur-md px-4 py-2.5 border-b border-emerald-500/20 flex justify-between items-center text-white">
+      <div class="flex items-center gap-2">
+        <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-400 p-[2px] shadow-lg shadow-emerald-500/30">
+          <div class="w-full h-full bg-slate-900 rounded-[10px] flex items-center justify-center font-black text-xs text-emerald-400">
+            Lv.4
+          </div>
+        </div>
+        <div>
+          <div class="flex items-center gap-1.5">
+            <span class="text-xs font-black text-white" id="user-name">제주탐험대장</span>
+            <span id="gps-badge" class="text-[9px] bg-emerald-950 text-emerald-400 border border-emerald-600 px-1.5 py-0.2 rounded font-extrabold flex items-center gap-1">
+              <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
+              GPS 추적 중
+            </span>
+          </div>
+          <div class="text-[11px] text-slate-400 flex items-center gap-1">
+            <span>📍</span> <span id="current-zone-name" class="text-emerald-400 font-bold">내 실제 위치</span>
+            <span id="gps-accuracy" class="text-[9px] text-slate-500">(±10m)</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="bg-slate-900/90 border border-amber-500/30 px-2.5 py-1 rounded-xl flex items-center gap-1 shadow-inner">
+        <span class="text-xs">✨</span>
+        <span id="user-exp" class="text-xs font-black text-amber-400">14,200</span>
+        <span class="text-[10px] text-slate-400">EXP</span>
+      </div>
+    </header>
+
+    <!-- 2. 중앙 뷰 영역 -->
+    <div class="relative w-full h-full">
+      
+      <!-- ================= [화면 1: 지도 탐험] ================= -->
+      <section id="view-map" class="absolute inset-0 w-full h-full">
+        <div id="map"></div>
+
+        <!-- 상단 모드 전환 & 텔레포트 컨트롤 바 -->
+        <div class="absolute top-16 left-3 right-3 z-20 flex flex-col gap-1.5">
+          
+          <!-- 실시간 GPS / 제주 모의모드 전환 스위치 -->
+          <div class="flex justify-between items-center bg-slate-950/90 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-700/80 shadow-xl">
+            <div class="flex items-center gap-1.5">
+              <span class="text-xs">🛰️</span>
+              <span class="text-[11px] font-extrabold text-white" id="mode-status-text">실시간 GPS 모드</span>
+            </div>
+            <div class="flex gap-1">
+              <button onclick="toggleGpsTracking()" id="btn-toggle-gps" class="bg-emerald-600 text-white text-[10px] font-bold px-2 py-1 rounded-lg active:scale-95 transition">
+                내 GPS 갱신
+              </button>
+              <button onclick="spawnNearUser()" class="bg-amber-600 text-white text-[10px] font-bold px-2 py-1 rounded-lg active:scale-95 transition">
+                ⚡주변 정령 소환
+              </button>
+            </div>
+          </div>
+
+          <!-- 제주도 권역 워프 (발표/시연용) -->
+          <div class="overflow-x-auto no-scrollbar flex gap-1.5 py-1 px-1 bg-slate-950/80 backdrop-blur rounded-xl border border-slate-800">
+            <span class="text-[10px] text-slate-400 font-bold px-1.5 py-1 whitespace-nowrap">🏝️ 제주 워프:</span>
+            <button onclick="teleportTo('seongsan')" class="teleport-btn bg-slate-800 text-slate-300 text-[10px] font-bold px-2 py-0.5 rounded-lg whitespace-nowrap active:scale-95 transition">성산일출봉</button>
+            <button onclick="teleportTo('hallasan')" class="teleport-btn bg-slate-800 text-slate-300 text-[10px] font-bold px-2 py-0.5 rounded-lg whitespace-nowrap active:scale-95 transition">한라산</button>
+            <button onclick="teleportTo('aewol')" class="teleport-btn bg-slate-800 text-slate-300 text-[10px] font-bold px-2 py-0.5 rounded-lg whitespace-nowrap active:scale-95 transition">애월</button>
+            <button onclick="teleportTo('seogwipo')" class="teleport-btn bg-slate-800 text-slate-300 text-[10px] font-bold px-2 py-0.5 rounded-lg whitespace-nowrap active:scale-95 transition">서귀포</button>
+          </div>
+
+        </div>
+
+        <!-- 하단 탐색 안내 바 -->
+        <div class="absolute bottom-20 left-4 right-4 z-20 bg-slate-950/90 backdrop-blur-md p-3.5 rounded-2xl border border-emerald-500/40 text-white shadow-2xl flex items-center justify-between">
+          <div class="flex items-center gap-2.5">
+            <div class="text-2xl">🧭</div>
+            <div>
+              <div class="text-[11px] text-emerald-400 font-black" id="radar-title">실시간 LBS 탐험 중</div>
+              <div class="text-xs text-slate-200" id="radar-status-text">걸어서 정령 반경 50m 이내로 접근하세요!</div>
+            </div>
+          </div>
+          <button onclick="recenterMap()" class="bg-gradient-to-r from-emerald-600 to-teal-600 text-white text-xs font-black px-3 py-2 rounded-xl active:scale-95 transition shadow-lg">
+            내 위치 중심
+          </button>
+        </div>
+      </section>
+
+      <!-- ================= [화면 2: WebAR 카메라 포획] ================= -->
+      <section id="view-ar" class="absolute inset-0 w-full h-full hidden z-20 bg-black">
+        <video id="camera-stream" autoplay playsinline class="w-full h-full object-cover"></video>
+        
+        <div id="ar-fallback" class="absolute inset-0 bg-gradient-to-b from-indigo-950 via-slate-950 to-emerald-950 flex flex-col items-center justify-center p-6 hidden">
+          <div class="text-center text-slate-400 text-xs bg-black/60 px-4 py-2 rounded-full border border-slate-700">
+            📷 카메라 미지원 환경 : 가상 증강현실 모드 작동
+          </div>
+        </div>
+
+        <div class="absolute top-16 left-4 right-4 z-20 flex justify-between items-center">
+          <button onclick="closeAR()" class="bg-black/70 text-white px-3.5 py-1.5 rounded-full text-xs font-black backdrop-blur border border-white/20">
+            ✕ 도망치기
+          </button>
+          <div class="bg-emerald-600 text-white px-3.5 py-1 rounded-full text-[11px] font-black shadow-lg animate-pulse">
+            ● AR 포획 모드
+          </div>
+        </div>
+
+        <div class="absolute inset-0 flex flex-col items-center justify-center z-10">
+          <div class="relative flex flex-col items-center cursor-pointer" onclick="attemptCatch()">
+            <div class="absolute w-36 h-36 rounded-full border-[3px] border-emerald-400 catch-ring pointer-events-none -top-4"></div>
+            <div id="ar-spirit-avatar" class="text-8xl floating-spirit filter drop-shadow-[0_0_35px_rgba(52,211,153,0.9)]">
+              🌊
+            </div>
+            <div class="mt-6 bg-slate-950/85 backdrop-blur-md border border-emerald-400/60 px-4 py-2 rounded-2xl text-center shadow-xl">
+              <div class="text-[10px] text-amber-400 font-bold" id="ar-spirit-region">출현 지역</div>
+              <div class="text-base font-black text-white" id="ar-spirit-title">정령 이름</div>
+              <div class="text-[10px] tex
